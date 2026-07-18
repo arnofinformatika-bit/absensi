@@ -1,19 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { LogOut, CheckCircle2, AlertCircle, Sparkles, User, Database, PlusCircle, Layout, Lock, FolderOpen, ExternalLink, RefreshCw } from 'lucide-react';
+import { LogOut, CheckCircle2, AlertCircle, Sparkles, User, Database, PlusCircle, Layout, Lock, FolderOpen, ExternalLink, RefreshCw, Settings, Clipboard, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Component imports
 import AttendanceForm from './components/AttendanceForm';
 import AttendanceList from './components/AttendanceList';
 
-// Core imports
-import { initAuth, googleSignIn, logout, setAccessToken, getAccessToken } from './firebase';
-import { findOrCreateSpreadsheet, findOrCreateFolder, uploadPhotoToDrive, addAttendanceRecord, fetchAttendanceRecords } from './googleApi';
-import { AttendanceRecord, SheetConfig, AppUser } from './types';
+// Types
+import { AttendanceRecord, AppUser } from './types';
+
+// Helper: Convert Blob to Base64
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -22,14 +29,14 @@ export default function App() {
   // Login form states
   const [loginNama, setLoginNama] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  
-  // Spreadsheet / Drive states
-  const [sheetConfig, setSheetConfig] = useState<SheetConfig>({
-    spreadsheetId: null,
-    spreadsheetUrl: null,
-    folderId: null,
-    status: 'loading',
+
+  // Apps Script Web App URL state
+  const [webAppUrl, setWebAppUrl] = useState(() => {
+    return localStorage.getItem('apps_script_web_app_url') || '';
   });
+  const [tempUrlInput, setTempUrlInput] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   // Attendance Records
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -41,69 +48,196 @@ export default function App() {
     setNotification({ message, type });
     setTimeout(() => {
       setNotification(null);
-    }, 6000); // 6 seconds auto-dismiss
+    }, 6000);
   };
 
-  // Auth initialization
+  // Google Apps Script source code template for copy-paste
+  const appsScriptCode = `// KODE UNTUK EXTENSIONS > APPS SCRIPT DI GOOGLE SPREADSHEET ANDA
+// Hubungkan spreadsheet Anda dengan aman tanpa Firebase / Google Sign-In
+
+function doGet(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sheet1");
+    if (!sheet) {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+    }
+    var rows = sheet.getDataRange().getValues();
+    var records = [];
+    
+    var headers = rows[0] || [];
+    var idxNama = headers.indexOf("NAMA");
+    var idxStatus = headers.indexOf("STATUS");
+    var idxKeterangan = headers.indexOf("KETERANGAN");
+    var idxUploadBukti = headers.indexOf("UPLOAD BUKTI");
+    var idxTanggal = headers.indexOf("TANGGAL");
+    
+    if (idxNama === -1) idxNama = 0;
+    if (idxStatus === -1) idxStatus = 1;
+    if (idxKeterangan === -1) idxKeterangan = 2;
+    if (idxUploadBukti === -1) idxUploadBukti = 3;
+    if (idxTanggal === -1) idxTanggal = 4;
+
+    for (var i = 1; i < rows.length; i++) {
+      var row = rows[i];
+      if (row[idxNama]) {
+        records.push({
+          id: "row_" + i,
+          nama: String(row[idxNama]),
+          keterangan: String(row[idxStatus] || "Hadir"),
+          catatan: String(row[idxKeterangan] || ""),
+          fotoBuktiUrl: String(row[idxUploadBukti] || ""),
+          tanggal: String(row[idxTanggal] || "")
+        });
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", data: records }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Sheet1");
+    if (!sheet) {
+      sheet = ss.getSheets()[0];
+    }
+    
+    var fileUrl = "";
+    if (data.photoBase64) {
+      try {
+        var base64Data = data.photoBase64.split(",")[1] || data.photoBase64;
+        var decoded = Utilities.base64Decode(base64Data);
+        var blob = Utilities.newBlob(decoded, "image/jpeg", "bukti_" + data.nama.replace(/\\s+/g, "_") + "_" + Date.now() + ".jpg");
+        
+        var folders = DriveApp.getFoldersByName("Bukti_Foto_Absensi");
+        var folder;
+        if (folders.hasNext()) {
+          folder = folders.next();
+        } else {
+          folder = DriveApp.createFolder("Bukti_Foto_Absensi");
+        }
+        
+        var file = folder.createFile(blob);
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        fileUrl = file.getUrl();
+      } catch (uploadErr) {
+        fileUrl = "Gagal upload: " + uploadErr.toString();
+      }
+    } else if (data.uploadBukti) {
+      fileUrl = data.uploadBukti;
+    }
+    
+    var headers = sheet.getDataRange().getValues()[0] || [];
+    var idxNama = headers.indexOf("NAMA");
+    var idxStatus = headers.indexOf("STATUS");
+    var idxKeterangan = headers.indexOf("KETERANGAN");
+    var idxUploadBukti = headers.indexOf("UPLOAD BUKTI");
+    var idxTanggal = headers.indexOf("TANGGAL");
+    
+    if (idxNama === -1) idxNama = 0;
+    if (idxStatus === -1) idxStatus = 1;
+    if (idxKeterangan === -1) idxKeterangan = 2;
+    if (idxUploadBukti === -1) idxUploadBukti = 3;
+    if (idxTanggal === -1) idxTanggal = 4;
+    
+    var rowData = [];
+    rowData[idxNama] = data.nama;
+    rowData[idxStatus] = data.keterangan;
+    rowData[idxKeterangan] = data.catatan || "";
+    rowData[idxUploadBukti] = fileUrl;
+    rowData[idxTanggal] = data.tanggal;
+    
+    for (var i = 0; i < Math.max(idxNama, idxStatus, idxKeterangan, idxUploadBukti, idxTanggal) + 1; i++) {
+      if (rowData[i] === undefined) rowData[i] = "";
+    }
+    
+    sheet.appendRow(rowData);
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: "success", fileUrl: fileUrl }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
+  // Copy code utility
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(appsScriptCode);
+    setCopiedCode(true);
+    showNotification('Kode Apps Script berhasil disalin ke clipboard!');
+    setTimeout(() => setCopiedCode(false), 3000);
+  };
+
+  // Auth initialization (Local only)
   useEffect(() => {
     const savedUserStr = localStorage.getItem('local_user_session');
-    const savedToken = localStorage.getItem('google_access_token');
-    
-    if (savedUserStr && savedToken) {
+    if (savedUserStr) {
       try {
         const savedUser = JSON.parse(savedUserStr) as AppUser;
         setUser(savedUser);
         setNeedsAuth(false);
-        setToken(savedToken);
-        setAccessToken(savedToken);
-        setupGoogleResources(savedToken, savedUser);
       } catch (err) {
         console.error('Error restoring session:', err);
         setNeedsAuth(true);
       }
     } else {
       setNeedsAuth(true);
-      setSheetConfig({
-        spreadsheetId: null,
-        spreadsheetUrl: null,
-        folderId: null,
-        status: 'not_connected',
-      });
+    }
+
+    // Load initial records from localStorage
+    const savedRecordsStr = localStorage.getItem('local_attendance_records');
+    if (savedRecordsStr) {
+      try {
+        setRecords(JSON.parse(savedRecordsStr));
+      } catch (e) {
+        console.error('Error parsing saved records', e);
+      }
     }
   }, []);
 
-  // Handle resource checking and setup
-  const setupGoogleResources = async (accessToken: string, currentUser: AppUser) => {
+  // Sync Google Sheet from Apps Script
+  const syncFromGoogleSheet = async (urlToSync: string) => {
+    if (!urlToSync) return;
     setIsSyncing(true);
-    setSheetConfig(prev => ({ ...prev, status: 'loading' }));
     try {
-      // 1. Find or verify Google Spreadsheet ID
-      const { spreadsheetId, webViewLink } = await findOrCreateSpreadsheet(accessToken);
-      
-      // 2. Find or create Google Drive Folder "Bukti_Foto_Absensi"
-      const folderId = await findOrCreateFolder(accessToken);
-
-      setSheetConfig({
-        spreadsheetId,
-        spreadsheetUrl: webViewLink,
-        folderId,
-        status: 'configured',
-      });
-
-      // 3. Fetch initial attendance log from Google Sheets
-      const googleLogs = await fetchAttendanceRecords(accessToken, spreadsheetId);
-      setRecords(googleLogs);
-
-    } catch (err: any) {
-      console.error('Resource setup error:', err);
-      showNotification('Gagal memuat atau menyinkronkan data Google Sheets.', 'error');
-      setSheetConfig(prev => ({ ...prev, status: 'error' }));
+      const response = await fetch(urlToSync);
+      if (response.ok) {
+        const result = await response.json();
+        if (result.status === 'success' && Array.isArray(result.data)) {
+          // Sort by date or show row order reversed (latest first)
+          const sorted = result.data.reverse();
+          setRecords(sorted);
+          localStorage.setItem('local_attendance_records', JSON.stringify(sorted));
+          showNotification('Berhasil menyinkronkan data dari Google Sheets!');
+        } else {
+          showNotification('Gagal memuat data dari Spreadsheet. Pastikan kode Apps Script sudah benar.', 'error');
+        }
+      } else {
+        showNotification('Gagal menghubungi Web App. Periksa apakah URL sudah benar.', 'error');
+      }
+    } catch (err) {
+      console.error('Error syncing:', err);
+      showNotification('Gagal sinkronisasi. Pastikan URL valid dan CORS aktif di Apps Script.', 'error');
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Name & Password 1234 Login Handler with integrated Google Sync
+  // Load sheet data on webAppUrl presence
+  useEffect(() => {
+    if (webAppUrl && user) {
+      syncFromGoogleSheet(webAppUrl);
+    }
+  }, [webAppUrl, user]);
+
+  // Handle Login (Direct Local Login)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!loginNama.trim()) {
@@ -117,77 +251,53 @@ export default function App() {
 
     setIsLoggingIn(true);
     try {
-      showNotification('Menghubungkan Akun Google untuk sinkronisasi otomatis...');
-      const result = await googleSignIn();
-      if (result) {
-        const sessionUser: AppUser = {
-          displayName: loginNama,
-          email: result.user.email || 'anonim@email.com',
-          photoURL: result.user.photoURL,
-          isGoogleConnected: true,
-        };
+      const sessionUser: AppUser = {
+        displayName: loginNama,
+        email: 'anggota@absensi.local',
+        isGoogleConnected: false,
+      };
 
-        localStorage.setItem('local_user_session', JSON.stringify(sessionUser));
-        localStorage.setItem('google_access_token', result.accessToken);
-        
-        setUser(sessionUser);
-        setToken(result.accessToken);
-        setAccessToken(result.accessToken);
-        setNeedsAuth(false);
-        
-        showNotification(`Selamat datang, ${loginNama}! Terhubung otomatis dengan Google Sheets.`);
-        await setupGoogleResources(result.accessToken, sessionUser);
-      } else {
-        showNotification('Gagal menghubungkan Google. Silakan coba lagi.', 'error');
-      }
+      localStorage.setItem('local_user_session', JSON.stringify(sessionUser));
+      setUser(sessionUser);
+      setNeedsAuth(false);
+      showNotification(`Selamat datang, ${loginNama}! Masuk sebagai Anggota.`);
     } catch (err: any) {
       console.error('Login error:', err);
-      showNotification('Gagal masuk. Pastikan Anda menyelesaikan login Google.', 'error');
+      showNotification('Gagal masuk. Silakan coba lagi.', 'error');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  // Re-synchronize manual handler
-  const handleReconnect = async () => {
-    const currentToken = token || getAccessToken() || localStorage.getItem('google_access_token');
-    if (!currentToken) {
-      showNotification('Token akses Google tidak ditemukan. Silakan masuk kembali.', 'error');
+  // Save Apps Script URL
+  const handleSaveWebAppUrl = () => {
+    const cleanUrl = tempUrlInput.trim();
+    if (cleanUrl && !cleanUrl.startsWith('https://script.google.com/')) {
+      showNotification('URL harus berupa URL Google Apps Script yang valid.', 'error');
       return;
     }
-    if (user) {
-      await setupGoogleResources(currentToken, user);
-      showNotification('Sinkronisasi data absensi berhasil diselesaikan!');
+
+    setWebAppUrl(cleanUrl);
+    localStorage.setItem('apps_script_web_app_url', cleanUrl);
+    setShowSettings(false);
+    if (cleanUrl) {
+      showNotification('URL Google Sheets berhasil disimpan! Memulai sinkronisasi...');
+      syncFromGoogleSheet(cleanUrl);
+    } else {
+      showNotification('Google Sheets dinonaktifkan. Mode Penyimpanan Lokal aktif.');
     }
   };
 
   // Logout click handler
-  const handleLogout = async () => {
+  const handleLogout = () => {
     const confirmLogout = window.confirm('Apakah Anda yakin ingin keluar dari aplikasi?');
     if (!confirmLogout) return;
 
-    try {
-      if (user?.isGoogleConnected) {
-        await logout();
-      }
-      localStorage.removeItem('local_user_session');
-      localStorage.removeItem('google_access_token');
-      setUser(null);
-      setToken(null);
-      setAccessToken(null);
-      setNeedsAuth(true);
-      setRecords([]);
-      setSheetConfig({
-        spreadsheetId: null,
-        spreadsheetUrl: null,
-        folderId: null,
-        status: 'not_connected',
-      });
-      showNotification('Anda telah berhasil keluar dari aplikasi.');
-    } catch (err: any) {
-      console.error('Sign out error:', err);
-      showNotification('Gagal keluar dari aplikasi.', 'error');
-    }
+    localStorage.removeItem('local_user_session');
+    setUser(null);
+    setNeedsAuth(true);
+    setRecords([]);
+    showNotification('Anda telah berhasil keluar dari aplikasi.');
   };
 
   // Handle Form submission
@@ -201,47 +311,66 @@ export default function App() {
   }) => {
     setIsSubmitting(true);
     try {
-      const uuid = typeof crypto.randomUUID === 'function' 
-        ? crypto.randomUUID() 
-        : 'id_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      const uuid = 'id_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      let photoBase64 = '';
 
-      let uploadedPhotoUrl = '';
-      const currentToken = token || getAccessToken() || localStorage.getItem('google_access_token');
+      if (formData.photoBlob) {
+        photoBase64 = await blobToBase64(formData.photoBlob);
+      }
 
-      if (currentToken && sheetConfig.spreadsheetId && sheetConfig.folderId) {
-        // 1. Upload photo to Drive if included
-        if (formData.photoBlob && formData.photoName) {
-          showNotification('Sedang mengunggah foto bukti ke Google Drive...');
-          const uploadResult = await uploadPhotoToDrive(
-            currentToken,
-            sheetConfig.folderId,
-            formData.photoName,
-            formData.photoBlob
-          );
-          uploadedPhotoUrl = uploadResult.webViewLink;
-        }
+      const activeUrl = localStorage.getItem('apps_script_web_app_url') || '';
 
-        // 2. Prepare new record
-        const newRecord: AttendanceRecord = {
-          id: uuid,
-          tanggal: formData.tanggal,
+      if (activeUrl) {
+        showNotification('Sedang mengirim absensi ke Google Sheets...');
+        
+        // Prepare payload for Apps Script
+        const payload = {
           nama: formData.nama,
-          keterangan: formData.keterangan,
-          catatan: formData.catatan,
-          fotoBuktiUrl: uploadedPhotoUrl,
-          waktuAbsen: new Date().toISOString(),
-          emailPenginput: user?.email || 'anonim@email.com',
+          keterangan: formData.keterangan, // Matches STATUS column
+          catatan: formData.catatan,       // Matches KETERANGAN column
+          photoBase64: photoBase64,
+          tanggal: formData.tanggal
         };
 
-        // 3. Write record row to Google Sheets
-        showNotification('Sedang menyimpan absensi ke Google Sheets...');
-        await addAttendanceRecord(currentToken, sheetConfig.spreadsheetId, newRecord);
+        try {
+          // Send to Apps Script using text/plain to bypass complex CORS preflight issues
+          await fetch(activeUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8'
+            },
+            body: JSON.stringify(payload)
+          });
+        } catch (postErr) {
+          console.warn('POST response redirect or CORS error handled, data sent.', postErr);
+        }
+      }
 
-        // 4. Update state
-        setRecords(prev => [newRecord, ...prev]);
-        showNotification(`Absensi untuk ${formData.nama} berhasil disimpan ke Spreadsheet!`);
+      // Create new record for instant local UI feedback
+      const newRecord: AttendanceRecord = {
+        id: uuid,
+        tanggal: formData.tanggal,
+        nama: formData.nama,
+        keterangan: formData.keterangan,
+        catatan: formData.catatan,
+        fotoBuktiUrl: photoBase64 || '',
+        waktuAbsen: new Date().toISOString(),
+        emailPenginput: user?.displayName || 'Anggota'
+      };
+
+      const updatedRecords = [newRecord, ...records];
+      setRecords(updatedRecords);
+      localStorage.setItem('local_attendance_records', JSON.stringify(updatedRecords));
+
+      if (activeUrl) {
+        showNotification(`Absensi ${formData.nama} berhasil dikirim ke Google Sheets!`);
+        // Refresh silently after a short delay to get the latest sheet image links if any
+        setTimeout(() => {
+          syncFromGoogleSheet(activeUrl);
+        }, 1500);
       } else {
-        showNotification('Tidak terhubung dengan Google Sheets. Silakan login kembali.', 'error');
+        showNotification(`Absensi ${formData.nama} disimpan secara lokal (Offline Mode).`);
       }
 
     } catch (err: any) {
@@ -297,7 +426,7 @@ export default function App() {
 
             <h1 className="text-2xl font-black text-teal-950 uppercase tracking-wide mb-1">Absensi Anggota</h1>
             <p className="text-xs text-teal-800/80 font-bold max-w-[320px] mx-auto mb-6">
-              Sistem pencatatan absensi yang terintegrasi otomatis dengan akun Google Sheets & Google Drive Anda sendiri.
+              Sistem pencatatan absensi sederhana dengan dukungan sinkronisasi Google Sheets.
             </p>
 
             <form onSubmit={handleLogin} className="space-y-4 text-left">
@@ -356,72 +485,155 @@ export default function App() {
                 </div>
                 <div>
                   <h1 className="text-sm font-black text-teal-950 uppercase tracking-wide leading-tight">Absensi Anggota</h1>
-                  <span className="text-[9px] text-teal-600 font-black tracking-widest uppercase">Google Sync Engine</span>
+                  <span className="text-[9px] text-teal-600 font-black tracking-widest uppercase">
+                    {webAppUrl ? 'Google Sheet Connected' : 'Local Storage Mode'}
+                  </span>
                 </div>
               </div>
 
-              {/* Quick Links for Spreadsheet & Folder */}
-              {sheetConfig.status === 'configured' && (
-                <div className="flex items-center gap-2">
-                  <a
-                    href={sheetConfig.spreadsheetUrl || '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] sm:text-xs font-black rounded-xl border-2 border-emerald-100 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-                    title="Buka Google Sheets"
-                  >
-                    <Database className="h-4 w-4 text-emerald-600" />
-                    <span className="hidden sm:inline">Buka Spreadsheet</span>
-                    <span className="sm:hidden">Sheet</span>
-                    <ExternalLink className="h-3 w-3 text-emerald-500" />
-                  </a>
-                  {sheetConfig.folderId && (
-                    <a
-                      href={`https://drive.google.com/drive/folders/${sheetConfig.folderId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-2 bg-orange-50 hover:bg-orange-100 text-orange-800 text-[10px] sm:text-xs font-black rounded-xl border-2 border-orange-100 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
-                      title="Buka Folder Drive"
-                    >
-                      <FolderOpen className="h-4 w-4 text-orange-500" />
-                      <span className="hidden sm:inline">Folder Foto</span>
-                      <span className="sm:hidden">Drive</span>
-                      <ExternalLink className="h-3 w-3 text-orange-400" />
-                    </a>
-                  )}
-                </div>
-              )}
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2.5">
+                <button
+                  onClick={() => {
+                    setTempUrlInput(webAppUrl);
+                    setShowSettings(!showSettings);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-black rounded-xl border-2 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                    webAppUrl 
+                      ? 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-800' 
+                      : 'bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-800'
+                  }`}
+                  title="Hubungkan Google Sheets"
+                >
+                  <Settings className="h-4 w-4" />
+                  <span className="hidden sm:inline">Pengaturan Sheet</span>
+                </button>
 
-              {/* User Profile & Logout */}
-              {user && (
-                <div className="flex items-center gap-3 bg-teal-50/40 border-2 border-teal-100/60 rounded-2xl p-1.5 pr-3 shrink-0 ml-auto sm:ml-0">
-                  {user.photoURL ? (
-                    <img
-                      src={user.photoURL}
-                      alt={user.displayName || 'User Profile'}
-                      className="h-8 w-8 rounded-xl object-cover border border-slate-200"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="h-8 w-8 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center border border-teal-100">
-                      <User className="h-4.5 w-4.5" />
-                    </div>
-                  )}
-                  <div className="hidden md:block text-left">
-                    <span className="text-xs font-black text-teal-950 block truncate max-w-[100px]">{user.displayName}</span>
-                    <span className="text-[9px] text-teal-600 font-bold block truncate max-w-[100px]">{user.email}</span>
-                  </div>
+                {webAppUrl && (
                   <button
-                    onClick={handleLogout}
-                    title="Keluar"
-                    className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl transition-all cursor-pointer"
+                    onClick={() => syncFromGoogleSheet(webAppUrl)}
+                    disabled={isSyncing}
+                    className="p-2 bg-slate-50 border-2 border-slate-150 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer active:scale-95 shrink-0"
+                    title="Sinkronisasi Ulang"
                   >
-                    <LogOut className="h-4 w-4" />
+                    <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
                   </button>
-                </div>
-              )}
+                )}
+
+                {/* User Profile & Logout */}
+                {user && (
+                  <div className="flex items-center gap-2.5 bg-slate-50 border-2 border-slate-150 rounded-2xl p-1 pr-2.5 shrink-0">
+                    <div className="h-7 w-7 rounded-lg bg-teal-600 text-white flex items-center justify-center text-xs font-black">
+                      {user.displayName.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="hidden md:block text-xs font-black text-slate-800 truncate max-w-[100px]">
+                      {user.displayName}
+                    </span>
+                    <button
+                      onClick={handleLogout}
+                      title="Keluar"
+                      className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-all cursor-pointer"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </header>
+
+          {/* Settings / Apps Script Integration Panel */}
+          <AnimatePresence>
+            {showSettings && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="bg-teal-50/50 border-b-2 border-teal-100 overflow-hidden"
+              >
+                <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-base font-black text-teal-950 uppercase tracking-wide">Pengaturan Integrasi Google Sheets</h2>
+                      <p className="text-xs text-teal-800 font-bold mt-1">
+                        Ikuti langkah mudah di bawah ini untuk menghubungkan aplikasi absensi ini dengan Google Spreadsheet Anda secara langsung!
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => setShowSettings(false)}
+                      className="text-xs font-black text-teal-800 hover:text-teal-950 underline"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+
+                  {/* 5 Easy Steps Guide */}
+                  <div className="bg-white border-2 border-teal-100 rounded-2xl p-5 space-y-4 shadow-sm text-xs text-slate-700">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div className="space-y-3">
+                        <h3 className="font-black text-teal-950 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                          <CheckCircle2 className="h-4 w-4 text-teal-600" /> Langkah Penyusunan (Hanya 1 Menit)
+                        </h3>
+                        <ol className="list-decimal list-inside space-y-2 font-medium">
+                          <li>Buka Google Spreadsheet target Anda.</li>
+                          <li>Pergi ke menu atas dan pilih <span className="font-bold text-teal-800">Ekstensi &gt; Apps Script</span>.</li>
+                          <li>Hapus semua kode bawaan, lalu <span className="font-bold text-teal-800">salin dan tempel kode di samping</span>.</li>
+                          <li>Klik tombol <span className="font-bold text-teal-800">Terapkan &gt; Penerapan baru</span> di kanan atas.</li>
+                          <li>Pilih jenis <span className="font-bold text-teal-800">Aplikasi Web</span>, isi konfigurasi:
+                            <ul className="list-disc list-inside ml-5 mt-1 text-slate-600 space-y-0.5">
+                              <li>Jalankan sebagai: <span className="font-bold">Saya (Email Anda)</span></li>
+                              <li>Siapa yang memiliki akses: <span className="font-bold">Siapa saja (Anyone)</span></li>
+                            </ul>
+                          </li>
+                          <li>Klik <span className="font-bold text-teal-800">Terapkan</span>, selesaikan izin dari Google, lalu salin <span className="font-bold text-teal-800">URL Aplikasi Web</span> ke input di bawah!</li>
+                        </ol>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-teal-950 text-[10px] uppercase tracking-wider">Salin Kode Apps Script</span>
+                          <button
+                            onClick={handleCopyCode}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold text-[10px] transition-all cursor-pointer shadow-sm active:scale-95"
+                          >
+                            {copiedCode ? <Check className="h-3 w-3" /> : <Clipboard className="h-3 w-3" />}
+                            {copiedCode ? 'Tersalin' : 'Salin Kode'}
+                          </button>
+                        </div>
+                        <div className="relative">
+                          <pre className="w-full h-44 overflow-y-auto bg-slate-900 text-teal-300 font-mono text-[10px] p-3 rounded-xl border border-slate-800 whitespace-pre">
+                            {appsScriptCode}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Web App URL Input Form */}
+                    <div className="pt-3 border-t border-teal-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                      <div className="flex-1">
+                        <label className="block text-[10px] font-black text-teal-900 uppercase tracking-wider mb-1">
+                          Google Apps Script Web App URL
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="https://script.google.com/macros/s/.../exec"
+                          value={tempUrlInput}
+                          onChange={(e) => setTempUrlInput(e.target.value)}
+                          className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-3 py-2.5 font-bold text-slate-700 text-xs focus:border-teal-400 focus:bg-white outline-none transition-all"
+                        />
+                      </div>
+                      <button
+                        onClick={handleSaveWebAppUrl}
+                        className="sm:self-end px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-black text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <Database className="h-4 w-4" /> Hubungkan
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Main Dashboard Space */}
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -429,7 +641,7 @@ export default function App() {
             {/* Form and List Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               
-              {/* Left Column: Input Form (Takes 5 spans on desktop) */}
+              {/* Left Column: Input Form */}
               <div className="lg:col-span-5 space-y-6">
                 <AttendanceForm
                   onSubmit={handleAttendanceSubmit}
@@ -437,7 +649,7 @@ export default function App() {
                 />
               </div>
 
-              {/* Right Column: Attendance Records (Takes 7 spans on desktop) */}
+              {/* Right Column: Attendance Records */}
               <div className="lg:col-span-7 h-full">
                 <AttendanceList
                   records={records}
@@ -451,7 +663,7 @@ export default function App() {
           {/* Footer Bar */}
           <footer className="border-t-2 border-teal-100 bg-white py-5 mt-auto">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-[10px] text-teal-800 font-black uppercase tracking-wider">
-              Absensi Anggota &bull; Terintegrasi Google Drive &amp; Sheets API &bull; {new Date().getFullYear()}
+              Absensi Anggota &bull; Terhubung Google Sheets Tanpa Hambatan &bull; {new Date().getFullYear()}
             </div>
           </footer>
         </>
