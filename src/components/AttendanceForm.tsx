@@ -13,10 +13,17 @@ interface AttendanceFormProps {
     photoName: string | null;
   }) => Promise<void>;
   isSubmitting: boolean;
+  initialNama?: string;
+  isAdmin?: boolean;
 }
 
-export default function AttendanceForm({ onSubmit, isSubmitting }: AttendanceFormProps) {
-  const [nama, setNama] = useState('');
+export default function AttendanceForm({ onSubmit, isSubmitting, initialNama = '', isAdmin = false }: AttendanceFormProps) {
+  const [nama, setNama] = useState(initialNama);
+
+  // Sync nama state when initialNama changes (e.g. on login/role changes)
+  useEffect(() => {
+    setNama(initialNama);
+  }, [initialNama]);
   // Set default to local date YYYY-MM-DD
   const [tanggal, setTanggal] = useState(() => {
     const today = new Date();
@@ -147,7 +154,7 @@ export default function AttendanceForm({ onSubmit, isSubmitting }: AttendanceFor
       });
 
       // Reset form upon success
-      setNama('');
+      setNama(initialNama);
       setCatatan('');
       setPhotoPreview(null);
       setSelectedFile(null);
@@ -168,17 +175,25 @@ export default function AttendanceForm({ onSubmit, isSubmitting }: AttendanceFor
       <form onSubmit={handleFormSubmit} className="space-y-6">
         {/* Nama Anggota */}
         <div>
-          <label htmlFor="nama_anggota" className="block text-xs font-black text-teal-900 uppercase tracking-widest mb-2">
-            Nama Anggota <span className="text-orange-500">*</span>
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label htmlFor="nama_anggota" className="block text-xs font-black text-teal-900 uppercase tracking-widest">
+              Nama Anggota <span className="text-orange-500">*</span>
+            </label>
+            {!isAdmin && (
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                🔒 Sesuai Akun Login
+              </span>
+            )}
+          </div>
           <input
             id="nama_anggota"
             type="text"
             required
+            disabled={!isAdmin}
             placeholder="Masukkan nama lengkap anggota..."
             value={nama}
             onChange={(e) => setNama(e.target.value)}
-            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-3.5 font-bold text-slate-700 focus:border-teal-400 focus:bg-white outline-none transition-all text-sm"
+            className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-3.5 font-bold text-slate-700 focus:border-teal-400 focus:bg-white outline-none transition-all text-sm disabled:opacity-85 disabled:cursor-not-allowed disabled:bg-slate-100/80 disabled:border-slate-200"
           />
         </div>
 

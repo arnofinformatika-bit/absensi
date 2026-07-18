@@ -261,11 +261,15 @@ function doPost(e) {
       return;
     }
 
-    const isUserAdmin = loginPassword === 'admin123';
+    const isUserAdmin = loginNama.trim().toLowerCase() === 'arnof 11' && loginPassword === 'arnof11';
     const isUserAnggota = loginPassword === '1234';
 
     if (!isUserAdmin && !isUserAnggota) {
-      showNotification('Password salah! Gunakan "1234" untuk Anggota atau "admin123" untuk Admin.', 'error');
+      if (loginNama.trim().toLowerCase() === 'arnof 11') {
+        showNotification('Password Admin salah! Gunakan password "arnof11".', 'error');
+      } else {
+        showNotification('Password salah! Gunakan "1234" untuk Anggota, atau login dengan Nama "arnof 11" & Password "arnof11" untuk Admin.', 'error');
+      }
       return;
     }
 
@@ -552,14 +556,17 @@ function doPost(e) {
               </button>
             </form>
 
-            <div className="mt-5 pt-4 border-t border-teal-50 space-y-1.5 text-center text-[9px] text-teal-700/80 font-black uppercase tracking-wider">
+            <div className="mt-5 pt-4 border-t border-teal-50 space-y-2 text-center text-[9px] text-teal-700/80 font-black uppercase tracking-wider">
               <div className="flex items-center justify-center gap-1">
-                <Lock className="h-3 w-3 text-teal-600" /> PETUNJUK AKSES PASSWORD:
+                <Lock className="h-3 w-3 text-teal-600" /> PETUNJUK AKSES LOGIN:
               </div>
-              <div className="flex flex-col sm:flex-row justify-center items-center gap-1.5 sm:gap-4 mt-1">
-                <span>🔑 Anggota: <strong className="text-teal-950 font-black">1234</strong></span>
-                <span className="hidden sm:inline text-teal-300">|</span>
-                <span>🛡️ Admin: <strong className="text-teal-950 font-black">admin123</strong></span>
+              <div className="flex flex-col gap-1.5 mt-1">
+                <div className="flex justify-center items-center gap-1">
+                  <span>🔑 ANGGOTA &rarr; PASSWORD: <strong className="text-teal-950 font-black">1234</strong> (Bebas Nama)</span>
+                </div>
+                <div className="flex justify-center items-center gap-1">
+                  <span>🛡️ ADMIN &rarr; NAMA: <strong className="text-teal-950 font-black">arnof 11</strong> &bull; PASSWORD: <strong className="text-teal-950 font-black">arnof11</strong></span>
+                </div>
               </div>
             </div>
           </motion.div>
@@ -750,6 +757,8 @@ function doPost(e) {
                 <AttendanceForm
                   onSubmit={handleAttendanceSubmit}
                   isSubmitting={isSubmitting}
+                  initialNama={user?.displayName || ''}
+                  isAdmin={user?.isAdmin}
                 />
               </div>
 
