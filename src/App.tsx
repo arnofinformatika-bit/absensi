@@ -9,6 +9,10 @@ import AttendanceList from './components/AttendanceList';
 // Types
 import { AttendanceRecord, AppUser } from './types';
 
+// Firebase Firestore
+import { db } from './firebase';
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, onSnapshot } from 'firebase/firestore';
+
 // Helper: Convert Blob to Base64
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -191,7 +195,42 @@ function doPost(e) {
     setTimeout(() => setCopiedCode(false), 3000);
   };
 
-  // Auth initialization (Local only)
+  // Fetch records from Firestore
+  const fetchFromFirestore = async () => {
+    try {
+      const q = query(collection(db, 'attendance_records'), orderBy('waktuAbsen', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const fetched: AttendanceRecord[] = [];
+      querySnapshot.forEach((docSnapshot) => {
+        const data = docSnapshot.data();
+        fetched.push({
+          id: docSnapshot.id,
+          tanggal: data.tanggal || '',
+          nama: data.nama || '',
+          keterangan: data.keterangan || 'Hadir',
+          catatan: data.catatan || '',
+          fotoBuktiUrl: data.fotoBuktiUrl || '',
+          waktuAbsen: data.waktuAbsen || '',
+          emailPenginput: data.emailPenginput || '',
+        });
+      });
+      setRecords(fetched);
+      localStorage.setItem('local_attendance_records', JSON.stringify(fetched));
+    } catch (err) {
+      console.error('Error fetching from Firestore:', err);
+      // Fallback to local storage
+      const savedRecordsStr = localStorage.getItem('local_attendance_records');
+      if (savedRecordsStr) {
+        try {
+          setRecords(JSON.parse(savedRecordsStr));
+        } catch (e) {
+          console.error('Error parsing local fallback records:', e);
+        }
+      }
+    }
+  };
+
+  // Auth & Real-time Firestore synchronization initialization
   useEffect(() => {
     const savedUserStr = localStorage.getItem('local_user_session');
     if (savedUserStr) {
@@ -207,15 +246,32 @@ function doPost(e) {
       setNeedsAuth(true);
     }
 
-    // Load initial records from localStorage
-    const savedRecordsStr = localStorage.getItem('local_attendance_records');
-    if (savedRecordsStr) {
-      try {
-        setRecords(JSON.parse(savedRecordsStr));
-      } catch (e) {
-        console.error('Error parsing saved records', e);
-      }
-    }
+    // Set up real-time listener to Firestore to sync across all devices/phones immediately
+    const q = query(collection(db, 'attendance_records'), orderBy('waktuAbsen', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched: AttendanceRecord[] = [];
+      snapshot.forEach((docSnapshot) => {
+        const data = docSnapshot.data();
+        fetched.push({
+          id: docSnapshot.id,
+          tanggal: data.tanggal || '',
+          nama: data.nama || '',
+          keterangan: data.keterangan || 'Hadir',
+          catatan: data.catatan || '',
+          fotoBuktiUrl: data.fotoBuktiUrl || '',
+          waktuAbsen: data.waktuAbsen || '',
+          emailPenginput: data.emailPenginput || '',
+        });
+      });
+      setRecords(fetched);
+      localStorage.setItem('local_attendance_records', JSON.stringify(fetched));
+    }, (err) => {
+      console.error('Error in real-time database listener:', err);
+      // Fallback: If real-time fails, try manual fetch
+      fetchFromFirestore();
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Sync Google Sheet from Apps Script
@@ -285,6 +341,10 @@ function doPost(e) {
       localStorage.setItem('local_user_session', JSON.stringify(sessionUser));
       setUser(sessionUser);
       setNeedsAuth(false);
+      
+      // Load current records immediately on login
+      fetchFromFirestore();
+
       showNotification(
         isUserAdmin
           ? `Selamat datang, ${loginNama}! Masuk sebagai Administrator.`
@@ -376,9 +436,26 @@ function doPost(e) {
         }
       }
 
+      // Save to Firestore for permanent shared database
+      let firestoreId = uuid;
+      try {
+        const docRef = await addDoc(collection(db, 'attendance_records'), {
+          tanggal: formData.tanggal,
+          nama: formData.nama,
+          keterangan: formData.keterangan,
+          catatan: formData.catatan || '',
+          fotoBuktiUrl: photoBase64 || '',
+          waktuAbsen: new Date().toISOString(),
+          emailPenginput: user?.displayName || 'Anggota'
+        });
+        firestoreId = docRef.id;
+      } catch (firestoreErr) {
+        console.error('Failed to save to Firestore:', firestoreErr);
+      }
+
       // Create new record for instant local UI feedback
       const newRecord: AttendanceRecord = {
-        id: uuid,
+        id: firestoreId,
         tanggal: formData.tanggal,
         nama: formData.nama,
         keterangan: formData.keterangan,
@@ -393,13 +470,13 @@ function doPost(e) {
       localStorage.setItem('local_attendance_records', JSON.stringify(updatedRecords));
 
       if (activeUrl) {
-        showNotification(`Absensi ${formData.nama} berhasil dikirim ke Google Sheets!`);
+        showNotification(`Absensi ${formData.nama} berhasil dikirim ke Google Sheets dan Database!`);
         // Refresh silently after a short delay to get the latest sheet image links if any
         setTimeout(() => {
           syncFromGoogleSheet(activeUrl);
         }, 1500);
       } else {
-        showNotification(`Absensi ${formData.nama} disimpan secara lokal (Offline Mode).`);
+        showNotification(`Absensi ${formData.nama} berhasil disimpan ke Database Cloud!`);
       }
 
     } catch (err: any) {
@@ -442,6 +519,13 @@ function doPost(e) {
         }
       }
 
+      // Delete from Firestore
+      try {
+        await deleteDoc(doc(db, 'attendance_records', id));
+      } catch (firestoreErr) {
+        console.error('Failed to delete from Firestore:', firestoreErr);
+      }
+
       // Local UI update instantly for instant feedback
       const updatedRecords = records.filter(r => r.id !== id);
       setRecords(updatedRecords);
@@ -454,7 +538,7 @@ function doPost(e) {
           syncFromGoogleSheet(activeUrl);
         }, 1500);
       } else {
-        showNotification('Catatan absensi dihapus secara lokal.');
+        showNotification('Catatan absensi berhasil dihapus dari Database Cloud!');
       }
     } catch (err: any) {
       console.error('Delete error:', err);
@@ -592,7 +676,7 @@ function doPost(e) {
                     )}
                   </div>
                   <span className="text-[9px] text-teal-600 font-black tracking-widest uppercase">
-                    {webAppUrl ? 'Google Sheet Connected' : 'Local Storage Mode'}
+                    {webAppUrl ? 'Google Sheet Connected' : 'Database Cloud Mode'}
                   </span>
                 </div>
               </div>
@@ -617,16 +701,23 @@ function doPost(e) {
                   </button>
                 )}
 
-                {webAppUrl && (
-                  <button
-                    onClick={() => syncFromGoogleSheet(webAppUrl)}
-                    disabled={isSyncing}
-                    className="p-2 bg-slate-50 border-2 border-slate-150 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer active:scale-95 shrink-0"
-                    title="Sinkronisasi Ulang"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                  </button>
-                )}
+                <button
+                  onClick={async () => {
+                    if (webAppUrl) {
+                      await syncFromGoogleSheet(webAppUrl);
+                    } else {
+                      setIsSyncing(true);
+                      await fetchFromFirestore();
+                      setIsSyncing(false);
+                      showNotification('Data absensi berhasil diperbarui!');
+                    }
+                  }}
+                  disabled={isSyncing}
+                  className="p-2 bg-slate-50 border-2 border-slate-150 hover:bg-slate-100 text-slate-700 rounded-xl transition-all cursor-pointer active:scale-95 shrink-0"
+                  title="Segarkan Data"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                </button>
 
                 {/* User Profile & Logout */}
                 {user && (
