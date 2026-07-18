@@ -1,0 +1,6 @@
+{
+  "name": "Absensi Anggota",
+  "description": "Aplikasi pencatatan absensi anggota dengan fitur kamera, tanggal, keterangan, unggah foto bukti, dan integrasi otomatis ke Google Sheets.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
