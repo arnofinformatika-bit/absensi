@@ -599,21 +599,23 @@ function doPost(e) {
 
               {/* Action Buttons */}
               <div className="flex items-center gap-2.5">
-                <button
-                  onClick={() => {
-                    setTempUrlInput(webAppUrl);
-                    setShowSettings(!showSettings);
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-black rounded-xl border-2 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
-                    webAppUrl 
-                      ? 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-800' 
-                      : 'bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-800'
-                  }`}
-                  title="Hubungkan Google Sheets"
-                >
-                  <Settings className="h-4 w-4" />
-                  <span className="hidden sm:inline">Pengaturan Sheet</span>
-                </button>
+                {user?.isAdmin && (
+                  <button
+                    onClick={() => {
+                      setTempUrlInput(webAppUrl);
+                      setShowSettings(!showSettings);
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-black rounded-xl border-2 transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 ${
+                      webAppUrl 
+                        ? 'bg-teal-50 hover:bg-teal-100 border-teal-200 text-teal-800' 
+                        : 'bg-orange-50 hover:bg-orange-100 border-orange-200 text-orange-800'
+                    }`}
+                    title="Hubungkan Google Sheets"
+                  >
+                    <Settings className="h-4 w-4" />
+                    <span className="hidden sm:inline">Pengaturan Sheet</span>
+                  </button>
+                )}
 
                 {webAppUrl && (
                   <button
@@ -655,7 +657,7 @@ function doPost(e) {
 
           {/* Settings / Apps Script Integration Panel */}
           <AnimatePresence>
-            {showSettings && (
+            {user?.isAdmin && showSettings && (
               <motion.div
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: 'auto', opacity: 1 }}

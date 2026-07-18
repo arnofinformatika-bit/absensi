@@ -252,7 +252,7 @@ export default function AttendanceList({ records, isLoading, onDelete, isDeletin
                 )}
 
                 {/* Elegant Trash Icon for Deletion */}
-                {onDelete && (
+                {isAdmin && onDelete && (
                   <button
                     onClick={() => onDelete(rec.id)}
                     disabled={isDeletingId === rec.id}
