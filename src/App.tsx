@@ -25,6 +25,7 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
 
   // Login form states
   const [loginNama, setLoginNama] = useState('');
@@ -106,6 +107,21 @@ function doPost(e) {
     var sheet = ss.getSheetByName("Sheet1");
     if (!sheet) {
       sheet = ss.getSheets()[0];
+    }
+    
+    // Fitur Hapus Catatan
+    if (data.action === "delete") {
+      var id = data.id;
+      if (id && id.indexOf("row_") === 0) {
+        var rowIndex = parseInt(id.replace("row_", ""), 10);
+        if (!isNaN(rowIndex) && rowIndex > 0) {
+          sheet.deleteRow(rowIndex + 1);
+          return ContentService.createTextOutput(JSON.stringify({ status: "success", message: "Catatan berhasil dihapus" }))
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: "error", message: "ID tidak valid" }))
+        .setMimeType(ContentService.MimeType.JSON);
     }
     
     var fileUrl = "";
@@ -244,8 +260,12 @@ function doPost(e) {
       showNotification('Silakan masukkan nama lengkap Anda.', 'error');
       return;
     }
-    if (loginPassword !== '1234') {
-      showNotification('Password salah! Gunakan password "1234".', 'error');
+
+    const isUserAdmin = loginPassword === 'admin123';
+    const isUserAnggota = loginPassword === '1234';
+
+    if (!isUserAdmin && !isUserAnggota) {
+      showNotification('Password salah! Gunakan "1234" untuk Anggota atau "admin123" untuk Admin.', 'error');
       return;
     }
 
@@ -253,14 +273,19 @@ function doPost(e) {
     try {
       const sessionUser: AppUser = {
         displayName: loginNama,
-        email: 'anggota@absensi.local',
+        email: isUserAdmin ? 'admin@absensi.local' : 'anggota@absensi.local',
         isGoogleConnected: false,
+        isAdmin: isUserAdmin,
       };
 
       localStorage.setItem('local_user_session', JSON.stringify(sessionUser));
       setUser(sessionUser);
       setNeedsAuth(false);
-      showNotification(`Selamat datang, ${loginNama}! Masuk sebagai Anggota.`);
+      showNotification(
+        isUserAdmin
+          ? `Selamat datang, ${loginNama}! Masuk sebagai Administrator.`
+          : `Selamat datang, ${loginNama}! Masuk sebagai Anggota.`
+      );
     } catch (err: any) {
       console.error('Login error:', err);
       showNotification('Gagal masuk. Silakan coba lagi.', 'error');
@@ -382,6 +407,66 @@ function doPost(e) {
     }
   };
 
+  // Handle Deleting attendance record
+  const handleDeleteAttendance = async (id: string) => {
+    const confirmDelete = window.confirm('Apakah Anda yakin ingin menghapus catatan absensi ini?');
+    if (!confirmDelete) return;
+
+    setIsDeletingId(id);
+    try {
+      const activeUrl = localStorage.getItem('apps_script_web_app_url') || '';
+      
+      if (activeUrl) {
+        showNotification('Sedang menghapus data dari Google Sheets...');
+        
+        const payload = {
+          action: 'delete',
+          id: id
+        };
+
+        try {
+          await fetch(activeUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'text/plain;charset=utf-8'
+            },
+            body: JSON.stringify(payload)
+          });
+        } catch (postErr) {
+          console.warn('POST response redirect or CORS error handled, deletion request sent.', postErr);
+        }
+      }
+
+      // Local UI update instantly for instant feedback
+      const updatedRecords = records.filter(r => r.id !== id);
+      setRecords(updatedRecords);
+      localStorage.setItem('local_attendance_records', JSON.stringify(updatedRecords));
+
+      if (activeUrl) {
+        showNotification('Catatan absensi berhasil dihapus!');
+        // Refresh silently after a short delay
+        setTimeout(() => {
+          syncFromGoogleSheet(activeUrl);
+        }, 1500);
+      } else {
+        showNotification('Catatan absensi dihapus secara lokal.');
+      }
+    } catch (err: any) {
+      console.error('Delete error:', err);
+      showNotification('Gagal menghapus data. Silakan coba lagi.', 'error');
+    } finally {
+      setIsDeletingId(null);
+    }
+  };
+
+  // Filter records based on role
+  const displayedRecords = user?.isAdmin
+    ? records
+    : records.filter(
+        (rec) => (rec.nama || '').toLowerCase().trim() === (user?.displayName || '').toLowerCase().trim()
+      );
+
   return (
     <div className="min-h-screen bg-[#F0FDFA] text-slate-800 font-sans flex flex-col selection:bg-teal-100">
       
@@ -467,8 +552,15 @@ function doPost(e) {
               </button>
             </form>
 
-            <div className="flex items-center justify-center gap-1.5 mt-5 text-[10px] text-teal-600 font-bold uppercase tracking-wider">
-              <Lock className="h-3.5 w-3.5 text-teal-600" /> Password bawaan: 1234
+            <div className="mt-5 pt-4 border-t border-teal-50 space-y-1.5 text-center text-[9px] text-teal-700/80 font-black uppercase tracking-wider">
+              <div className="flex items-center justify-center gap-1">
+                <Lock className="h-3 w-3 text-teal-600" /> PETUNJUK AKSES PASSWORD:
+              </div>
+              <div className="flex flex-col sm:flex-row justify-center items-center gap-1.5 sm:gap-4 mt-1">
+                <span>🔑 Anggota: <strong className="text-teal-950 font-black">1234</strong></span>
+                <span className="hidden sm:inline text-teal-300">|</span>
+                <span>🛡️ Admin: <strong className="text-teal-950 font-black">admin123</strong></span>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -484,7 +576,14 @@ function doPost(e) {
                   <Database className="h-5 w-5" />
                 </div>
                 <div>
-                  <h1 className="text-sm font-black text-teal-950 uppercase tracking-wide leading-tight">Absensi Anggota</h1>
+                  <div className="flex items-center gap-1.5">
+                    <h1 className="text-sm font-black text-teal-950 uppercase tracking-wide leading-tight">Absensi Anggota</h1>
+                    {user?.isAdmin && (
+                      <span className="bg-rose-50 text-rose-700 border border-rose-100 px-1 py-0.5 rounded text-[8px] font-black uppercase tracking-wider">
+                        Admin
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[9px] text-teal-600 font-black tracking-widest uppercase">
                     {webAppUrl ? 'Google Sheet Connected' : 'Local Storage Mode'}
                   </span>
@@ -523,16 +622,21 @@ function doPost(e) {
                 {/* User Profile & Logout */}
                 {user && (
                   <div className="flex items-center gap-2.5 bg-slate-50 border-2 border-slate-150 rounded-2xl p-1 pr-2.5 shrink-0">
-                    <div className="h-7 w-7 rounded-lg bg-teal-600 text-white flex items-center justify-center text-xs font-black">
+                    <div className={`h-7 w-7 rounded-lg text-white flex items-center justify-center text-xs font-black ${user.isAdmin ? 'bg-rose-600' : 'bg-teal-600'}`}>
                       {user.displayName.charAt(0).toUpperCase()}
                     </div>
-                    <span className="hidden md:block text-xs font-black text-slate-800 truncate max-w-[100px]">
-                      {user.displayName}
-                    </span>
+                    <div className="hidden md:flex flex-col text-left">
+                      <span className="text-xs font-black text-slate-800 truncate max-w-[100px] leading-tight">
+                        {user.displayName}
+                      </span>
+                      <span className="text-[8px] font-bold text-slate-500 uppercase leading-none mt-0.5">
+                        {user.isAdmin ? 'Administrator' : 'Anggota'}
+                      </span>
+                    </div>
                     <button
                       onClick={handleLogout}
                       title="Keluar"
-                      className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-all cursor-pointer"
+                      className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-all cursor-pointer ml-1"
                     >
                       <LogOut className="h-3.5 w-3.5" />
                     </button>
@@ -652,8 +756,12 @@ function doPost(e) {
               {/* Right Column: Attendance Records */}
               <div className="lg:col-span-7 h-full">
                 <AttendanceList
-                  records={records}
+                  records={displayedRecords}
                   isLoading={isSyncing}
+                  onDelete={handleDeleteAttendance}
+                  isDeletingId={isDeletingId}
+                  isAdmin={user?.isAdmin}
+                  userDisplayName={user?.displayName}
                 />
               </div>
 

@@ -21,5 +21,6 @@ export interface AppUser {
   email: string;
   photoURL?: string | null;
   isGoogleConnected: boolean;
+  isAdmin?: boolean;
 }
 

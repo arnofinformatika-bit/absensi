@@ -1,14 +1,18 @@
 import React, { useState } from 'react';
-import { Search, Calendar, CheckSquare, AlertCircle, Eye, EyeOff, FileText, Clock, ExternalLink, X, HelpCircle, ImageIcon } from 'lucide-react';
+import { Search, Calendar, CheckSquare, AlertCircle, Eye, EyeOff, FileText, Clock, ExternalLink, X, HelpCircle, ImageIcon, Trash2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AttendanceRecord } from '../types';
 
 interface AttendanceListProps {
   records: AttendanceRecord[];
   isLoading: boolean;
+  onDelete?: (id: string) => void;
+  isDeletingId?: string | null;
+  isAdmin?: boolean;
+  userDisplayName?: string;
 }
 
-export default function AttendanceList({ records, isLoading }: AttendanceListProps) {
+export default function AttendanceList({ records, isLoading, onDelete, isDeletingId, isAdmin, userDisplayName }: AttendanceListProps) {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('Semua');
   const [zoomImage, setZoomImage] = useState<{ url: string; title: string } | null>(null);
@@ -72,14 +76,29 @@ export default function AttendanceList({ records, isLoading }: AttendanceListPro
 
   return (
     <div className="bg-white border-2 border-teal-100 rounded-[32px] p-8 shadow-xl flex flex-col h-full">
-      <div className="flex items-center justify-between gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-2.5">
           <div className="p-2 bg-teal-50 text-teal-600 rounded-xl">
             <CheckSquare className="h-5 w-5" />
           </div>
-          <h2 className="text-lg font-black text-teal-950 uppercase tracking-wide">Riwayat Absensi</h2>
+          <div>
+            <h2 className="text-lg font-black text-teal-950 uppercase tracking-wide">Riwayat Absensi</h2>
+            {userDisplayName && (
+              <p className="text-[10px] text-teal-700 font-bold uppercase tracking-wider mt-0.5 flex items-center gap-1">
+                {isAdmin ? (
+                  <span className="bg-rose-50 text-rose-700 border border-rose-100 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase">
+                    🛡️ Administrator
+                  </span>
+                ) : (
+                  <span className="bg-teal-50 text-teal-800 border border-teal-100 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase">
+                    👤 Anggota: {userDisplayName}
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
         </div>
-        <span className="text-xs font-black px-3 py-1 bg-teal-50 text-teal-800 border-2 border-teal-100 rounded-xl">
+        <span className="text-xs font-black px-3 py-1 bg-teal-50 text-teal-800 border-2 border-teal-100 rounded-xl self-start sm:self-auto shrink-0">
           {filteredRecords.length} Catatan
         </span>
       </div>
@@ -179,57 +198,75 @@ export default function AttendanceList({ records, isLoading }: AttendanceListPro
                 </p>
               </div>
 
-              {/* Photo Proof */}
-              {rec.fotoBuktiUrl ? (
-                <div className="relative group shrink-0">
-                  <div className="w-14 h-14 rounded-xl overflow-hidden border-2 border-slate-200 bg-slate-50 cursor-pointer relative">
-                    <img
-                      src={rec.fotoBuktiUrl}
-                      alt={`Bukti ${rec.nama}`}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-all"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        // If it fails to render (e.g. permission or iframe/cors issues), replace with a visual placeholder
-                        e.currentTarget.style.display = 'none';
-                        const p = e.currentTarget.parentElement;
-                        if (p) {
-                          const iconEl = p.querySelector('.fallback-icon');
-                          if (iconEl) iconEl.classList.remove('hidden');
-                        }
-                      }}
-                    />
-                    {/* Fallback Icon inside same div */}
-                    <div className="fallback-icon hidden absolute inset-0 flex items-center justify-center bg-slate-100 text-teal-600">
-                      <ImageIcon className="h-5 w-5" />
+              {/* Photo Proof & Delete Action Column */}
+              <div className="flex flex-col items-end justify-between h-full min-h-[70px] gap-3 shrink-0">
+                {rec.fotoBuktiUrl ? (
+                  <div className="relative group shrink-0">
+                    <div className="w-14 h-14 rounded-xl overflow-hidden border-2 border-slate-200 bg-slate-50 cursor-pointer relative">
+                      <img
+                        src={rec.fotoBuktiUrl}
+                        alt={`Bukti ${rec.nama}`}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-all"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          // If it fails to render (e.g. permission or iframe/cors issues), replace with a visual placeholder
+                          e.currentTarget.style.display = 'none';
+                          const p = e.currentTarget.parentElement;
+                          if (p) {
+                            const iconEl = p.querySelector('.fallback-icon');
+                            if (iconEl) iconEl.classList.remove('hidden');
+                          }
+                        }}
+                      />
+                      {/* Fallback Icon inside same div */}
+                      <div className="fallback-icon hidden absolute inset-0 flex items-center justify-center bg-slate-100 text-teal-600">
+                        <ImageIcon className="h-5 w-5" />
+                      </div>
+                      {/* Hover Eye Overlay */}
+                      <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
+                        <Eye className="h-3.5 w-3.5 text-white" />
+                      </div>
                     </div>
-                    {/* Hover Eye Overlay */}
-                    <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                      <Eye className="h-3.5 w-3.5 text-white" />
+                    <div className="flex gap-2 justify-center mt-1">
+                      <button
+                        onClick={() => setZoomImage({ url: rec.fotoBuktiUrl, title: rec.nama })}
+                        className="text-[10px] text-teal-700 hover:text-teal-900 flex items-center gap-0.5 font-bold cursor-pointer"
+                      >
+                        Lihat
+                      </button>
+                      <a
+                        href={rec.fotoBuktiUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] text-slate-400 hover:text-slate-600"
+                      >
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
                     </div>
                   </div>
-                  <div className="flex gap-2 justify-center mt-1">
-                    <button
-                      onClick={() => setZoomImage({ url: rec.fotoBuktiUrl, title: rec.nama })}
-                      className="text-[10px] text-teal-700 hover:text-teal-900 flex items-center gap-0.5 font-bold cursor-pointer"
-                    >
-                      Lihat
-                    </button>
-                    <a
-                      href={rec.fotoBuktiUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[10px] text-slate-400 hover:text-slate-600"
-                    >
-                      <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
+                ) : (
+                  <div className="w-14 h-14 rounded-xl border-2 border-slate-100 bg-slate-50 flex flex-col items-center justify-center text-slate-300 shrink-0">
+                    <EyeOff className="h-4 w-4 mb-0.5" />
+                    <span className="text-[8px] font-bold text-slate-400">No Foto</span>
                   </div>
-                </div>
-              ) : (
-                <div className="w-14 h-14 rounded-xl border-2 border-slate-100 bg-slate-50 flex flex-col items-center justify-center text-slate-300 shrink-0">
-                  <EyeOff className="h-4 w-4 mb-0.5" />
-                  <span className="text-[8px] font-bold text-slate-400">No Foto</span>
-                </div>
-              )}
+                )}
+
+                {/* Elegant Trash Icon for Deletion */}
+                {onDelete && (
+                  <button
+                    onClick={() => onDelete(rec.id)}
+                    disabled={isDeletingId === rec.id}
+                    className="p-1.5 bg-slate-50 hover:bg-rose-50 border-2 border-slate-100 hover:border-rose-100 text-slate-400 hover:text-rose-600 rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center mt-1"
+                    title="Hapus Catatan Absensi"
+                  >
+                    {isDeletingId === rec.id ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-rose-500" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           ))
         )}
